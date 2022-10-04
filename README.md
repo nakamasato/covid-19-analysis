@@ -13,7 +13,8 @@ python visualize.py
 
 ## Data
 
-- [新型コロナワクチンの接種状況](https://info.vrs.digital.go.jp/dashboard)
+1. [新型コロナワクチンの接種状況](https://info.vrs.digital.go.jp/dashboard): data/prefecture.ndjson
+1. [日本の超過および過少死亡数ダッシュボード](https://exdeaths-japan.org/graph/weekly/): data/exdeath-japan-observed.csv
 
 
 ## Reference

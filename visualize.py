@@ -1,17 +1,16 @@
 import json
 from collections import defaultdict
+from datetime import datetime
 
 import ndjson
+import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from dash import Dash, Input, Output, dcc, html
+from plotly.subplots import make_subplots
 
 
-def visualize(x=["a", "b", "c"], y=[[1, 3, 2], [2, 3, 4]], title="sample figure", height=325):
-
-    fig = px.line(
-        x=x, y=y,
-        title=title, height=height
-    )
+def visualize(fig):
 
     app = Dash(__name__)
 
@@ -38,18 +37,63 @@ def visualize(x=["a", "b", "c"], y=[[1, 3, 2], [2, 3, 4]], title="sample figure"
     app.run_server(debug=True)
 
 
-def read_data():
-    # load from file-like objects
+def read_vaccination(prefecture_id):
     with open('data/prefecture.ndjson') as f:
         data = ndjson.load(f)
 
-    # cnt = []
     date2cnt = defaultdict(int)
     for d in data:
+        if d["prefecture"] != prefecture_id:
+            continue
         date2cnt[d['date']] += d['count']
-    return date2cnt.keys(), date2cnt.values()
+
+    return pd.concat([pd.to_datetime(pd.Series(date2cnt.keys(), name="date")), pd.Series(
+        date2cnt.values(), name="vaccination")], axis=1)
+
+
+def read_death(prefecture):
+    df = pd.read_csv('data/exdeath-japan-observed.csv')
+    df['week_ending_date']
+    df['week_ending_date'] = pd.to_datetime(
+        df['week_ending_date'], format="%d%b%Y")  # 17feb2013
+    df = df[(df['prefecture_EN'] == prefecture) & (df['week_ending_date'] > "2021-03-01")].loc[:,
+                                                                                               ('week_ending_date', 'Observed')]
+    return df.loc[:, ('week_ending_date', 'Observed')].rename(columns={'week_ending_date': 'date', 'Observed': 'death'})
+
+
+def get_prefecture_id(prefecture_name):
+    '''Get prefecture id from data/exdeath-japan-observed.csv.
+    ToDo: use the prefecture list for master data.
+    '''
+    df = pd.read_csv('data/exdeath-japan-observed.csv')
+    return df[df['prefecture_EN'] == prefecture_name].head(1)['prefecture_id'].iloc[0]
 
 
 if __name__ == '__main__':
-    x, y = read_data()
-    visualize(x, y, "Covid-19 Analysis")
+    prefecture = "Tokyo"
+
+    # make data
+    prefecture_id = get_prefecture_id(prefecture)
+    df_death = read_death(prefecture)
+    df_vaccination = read_vaccination(f"{prefecture_id:2d}")
+    df = pd.concat([df_death, df_vaccination])
+
+    # make fig
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Scatter(
+            x=df['date'],
+            y=df['death'],
+            name='death'),
+        secondary_y=False)
+
+    fig.add_trace(
+        go.Scatter(
+            x=df['date'],
+            y=df['vaccination'],
+            name="vaccination"),
+        secondary_y=True)
+    fig.update_layout(title_text=f"Vaccination & Death ({prefecture})")
+
+    # visualize
+    visualize(fig)
