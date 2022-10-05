@@ -1,6 +1,11 @@
 import json
+import random
+import time
 from collections import defaultdict
 from datetime import datetime
+from functools import lru_cache
+from time import perf_counter
+from tkinter import ALL
 
 import ndjson
 import pandas as pd
@@ -9,13 +14,28 @@ import plotly.graph_objects as go
 from dash import Dash, Input, Output, dcc, html
 from plotly.subplots import make_subplots
 
+prefecture_master = pd.read_csv('data/prefecture_master.csv').loc[:, ('prefecture_id', 'prefectureJP')].rename(
+    columns={'prefecture_id': 'value', 'prefectureJP': 'label'}).T.to_dict().values()
 
-def visualize(fig):
+ALL_JAPAN_ID = 48
+START_DATE = "2020-01-01"
+
+
+def run():
+
+    df = load_data()
+    df = df[df['prefecture_id'] == ALL_JAPAN_ID]
+
+    fig = make_fig(df, "")
 
     app = Dash(__name__)
-
     app.layout = html.Div([
-        html.H4('Displaying figure structure as JSON'),
+        html.H4('Covid-19 Analysis'),
+        dcc.Dropdown(
+            options=list(prefecture_master),
+            value=ALL_JAPAN_ID,
+            id='demo-dropdown'),
+        html.Div(id='dd-output-container'),
         dcc.Graph(id="graph", figure=fig),
         dcc.Clipboard(target_id="structure"),
         html.Pre(
@@ -29,6 +49,20 @@ def visualize(fig):
     ])
 
     @app.callback(
+        Output('graph', 'figure'),
+        Input('demo-dropdown', 'value')
+    )
+    def update_graph(value):
+        if value is None:
+            return
+        print(f"update_graph {value}")
+        df = load_data()
+        df = df[df['prefecture_id'] == int(value)]
+        fig = make_fig(df, f"Vaccination & Death")
+        fig.update_layout(transition_duration=0)
+        return fig
+
+    @app.callback(
         Output("structure", "children"),
         Input("graph", "figure"))
     def display_structure(fig_json):
@@ -37,28 +71,24 @@ def visualize(fig):
     app.run_server(debug=True)
 
 
-def read_vaccination(prefecture_id):
-    with open('data/prefecture.ndjson') as f:
-        data = ndjson.load(f)
-
-    date2cnt = defaultdict(int)
-    for d in data:
-        if d["prefecture"] != prefecture_id:
-            continue
-        date2cnt[d['date']] += d['count']
-
-    return pd.concat([pd.to_datetime(pd.Series(date2cnt.keys(), name="date")), pd.Series(
-        date2cnt.values(), name="vaccination")], axis=1)
+def read_vaccination():
+    df = pd.read_json('data/prefecture.ndjson', lines=True)
+    df.astype({'prefecture': 'int32'}, copy=False)
+    df = df.loc[:, ('date', 'count', 'prefecture')]
+    df = df.groupby(['date', 'prefecture']).sum().reset_index()
+    daily_all_df = df.groupby(['date']).sum()
+    daily_all_df['prefecture'] = ALL_JAPAN_ID
+    daily_all_df.reset_index(inplace=True)
+    df = pd.concat([df, daily_all_df], ignore_index=True)
+    return df.rename(columns={'count': 'vaccination', 'prefecture': 'prefecture_id'})
 
 
-def read_death(prefecture):
+def read_death():
     df = pd.read_csv('data/exdeath-japan-observed.csv')
-    df['week_ending_date']
     df['week_ending_date'] = pd.to_datetime(
         df['week_ending_date'], format="%d%b%Y")  # 17feb2013
-    df = df[(df['prefecture_EN'] == prefecture) & (df['week_ending_date'] > "2021-03-01")].loc[:,
-                                                                                               ('week_ending_date', 'Observed')]
-    return df.loc[:, ('week_ending_date', 'Observed')].rename(columns={'week_ending_date': 'date', 'Observed': 'death'})
+    df = df[(df['week_ending_date'] > START_DATE)]
+    return df.loc[:, ('week_ending_date', 'Observed', 'prefecture_id')].rename(columns={'week_ending_date': 'date', 'Observed': 'death'})
 
 
 def get_prefecture_id(prefecture_name):
@@ -69,16 +99,25 @@ def get_prefecture_id(prefecture_name):
     return df[df['prefecture_EN'] == prefecture_name].head(1)['prefecture_id'].iloc[0]
 
 
-if __name__ == '__main__':
-    prefecture = "Tokyo"
-
-    # make data
-    prefecture_id = get_prefecture_id(prefecture)
-    df_death = read_death(prefecture)
-    df_vaccination = read_vaccination(f"{prefecture_id:2d}")
+@lru_cache
+def load_data():
+    print("loading data")
+    t = time.time()
+    df_death = read_death()
+    print(f"df_death {df_death.shape}")
+    df_vaccination = read_vaccination()
+    print(f"df_vaccination {df_vaccination.shape}")
     df = pd.concat([df_death, df_vaccination])
+    print(
+        f"finished loading. time: {(time.time() - t):.2f}, "
+        f"df_vaccination: {df_vaccination.shape}, "
+        f"df_death: {df_death.shape}, "
+        f"df: {df.shape}"
+    )
+    return df
 
-    # make fig
+
+def make_fig(df, title):
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(
         go.Scatter(
@@ -93,7 +132,10 @@ if __name__ == '__main__':
             y=df['vaccination'],
             name="vaccination"),
         secondary_y=True)
-    fig.update_layout(title_text=f"Vaccination & Death ({prefecture})")
+    fig.update_layout(
+        title_text=title)
+    return fig
 
-    # visualize
-    visualize(fig)
+
+if __name__ == '__main__':
+    run()
